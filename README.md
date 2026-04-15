@@ -1,0 +1,16 @@
+// =====================
+// README.md
+// =====================
+# Movie Booking Platform
+
+## Run
+1. docker-compose up
+2. Run BookingServiceApplication
+
+## API
+POST /api/v1/bookings
+
+## Features
+- Seat locking via Redis
+- Idempotent booking
+- Microservice ready
