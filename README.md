@@ -14,3 +14,6 @@ POST /api/v1/bookings
 - Seat locking via Redis
 - Idempotent booking
 - Microservice ready
+
+## Complete Design Document with HLD and LLD
+MovieBookingPlatform_SystemDesign.docx
