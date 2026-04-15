@@ -1,0 +1,218 @@
+// Root: movie-booking-platform
+
+// =====================
+// booking-service/src/main/java/com/app/booking/BookingServiceApplication.java
+// =====================
+package com.app.booking;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class BookingServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(BookingServiceApplication.class, args);
+    }
+}
+
+// =====================
+// controller/BookingController.java
+// =====================
+package com.app.booking.controller;
+
+import com.app.booking.service.BookingService;
+import com.app.booking.dto.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/v1/bookings")
+@RequiredArgsConstructor
+public class BookingController {
+
+    private final BookingService bookingService;
+
+    @PostMapping
+    public BookingResponse create(@RequestBody BookingRequest request,
+                                  @RequestHeader("X-Idempotency-Key") String key) {
+        return bookingService.createBooking(request, key);
+    }
+}
+
+// =====================
+// service/BookingService.java
+// =====================
+package com.app.booking.service;
+
+import com.app.booking.entity.*;
+import com.app.booking.repository.*;
+import com.app.booking.dto.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class BookingService {
+
+    private final BookingRepository bookingRepository;
+    private final SeatLockService seatLockService;
+
+    public BookingResponse createBooking(BookingRequest req, String key) {
+
+        bookingRepository.findByIdempotencyKey(key)
+                .ifPresent(b -> { throw new RuntimeException("Duplicate booking"); });
+
+        seatLockService.lockSeats(req.getShowId(), req.getSeatIds());
+
+        Booking booking = new Booking();
+        booking.setBookingId(UUID.randomUUID());
+        booking.setShowId(req.getShowId());
+        booking.setStatus("PENDING");
+        booking.setIdempotencyKey(key);
+
+        bookingRepository.save(booking);
+
+        return new BookingResponse(booking.getBookingId(), "PENDING");
+    }
+}
+
+// =====================
+// service/SeatLockService.java
+// =====================
+package com.app.booking.service;
+
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class SeatLockService {
+
+    private final StringRedisTemplate redisTemplate;
+
+    public SeatLockService(StringRedisTemplate redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public void lockSeats(String showId, List<String> seats) {
+        for (String seat : seats) {
+            String key = "seat:lock:" + showId + ":" + seat;
+            Boolean success = redisTemplate.opsForValue()
+                    .setIfAbsent(key, "locked");
+
+            if (Boolean.FALSE.equals(success)) {
+                throw new RuntimeException("Seat already locked");
+            }
+        }
+    }
+}
+
+// =====================
+// entity/Booking.java
+// =====================
+package com.app.booking.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+
+import java.util.UUID;
+
+@Entity
+@Data
+public class Booking {
+
+    @Id
+    private UUID bookingId;
+
+    private UUID showId;
+
+    private String status;
+
+    @Column(unique = true)
+    private String idempotencyKey;
+}
+
+// =====================
+// repository/BookingRepository.java
+// =====================
+package com.app.booking.repository;
+
+import com.app.booking.entity.Booking;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface BookingRepository extends JpaRepository<Booking, UUID> {
+    Optional<Booking> findByIdempotencyKey(String key);
+}
+
+// =====================
+// dto/BookingRequest.java
+// =====================
+package com.app.booking.dto;
+
+import lombok.Data;
+
+import java.util.List;
+import java.util.UUID;
+
+@Data
+public class BookingRequest {
+    private UUID showId;
+    private List<String> seatIds;
+}
+
+// =====================
+// dto/BookingResponse.java
+// =====================
+package com.app.booking.dto;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+
+import java.util.UUID;
+
+@Data
+@AllArgsConstructor
+public class BookingResponse {
+    private UUID bookingId;
+    private String status;
+}
+
+// =====================
+// application.yml
+// =====================
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/movie
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+// =====================
+// docker-compose.yml (root)
+// =====================
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: movie
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  kafka:
+    image: bitnami/kafka:latest
+
